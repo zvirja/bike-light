@@ -1,4 +1,5 @@
 #include <avr/interrupt.h>
+#include <avr/sleep.h>
 #include <util/delay.h>
 #include <util/atomic.h>
 
@@ -7,13 +8,13 @@
 #define BATTERY_LVL_SENSOR PB2
 #define BTN_PIN PB4
 
-#define TICK_MS 32
+#define TICK_MS 16
 
-#define MODE_SWITCH_WINDOW_TICKS 300 // Around 10s
+#define MODE_SWITCH_WINDOW_TICKS 600 // Around 10s
 static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 9600);
 
 #define DEBOUNCE_DELAY_TICKS 1
-static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 32);
+static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 16);
 
 // Use big value and then we don't care about overflows at all
 volatile uint32_t _ticks = 0;
@@ -47,9 +48,9 @@ inline void enableWatchdogTimer(bool enable) {
 }
 
 inline void configureWatchdogTimer() {
-  WDTCR |= _BV(WDCE); // allow to modify prescaler
-  WDTCR |= _BV(WDP0); // set prestaler to 32ms
-  static_assert(TICK_MS == 32, "Wrong TICK_MS");
+  // WDTCR |= _BV(WDCE); // allow to modify prescaler
+  // WDTCR |= _BV(WDP0); // set prestaler to 32ms
+  static_assert(TICK_MS == 16, "Wrong TICK_MS");
 }
 
 inline void configureButton() {
@@ -74,9 +75,20 @@ inline void enableFrontLed(bool enable) {
 }
 
 inline void enableRearLed(bool enable) {
+  // for now we send two clicks to back - to enable
+  // then one click - to disable
+  // it's hacky - it's just to make it work for now
   if (enable) {
     PORTB |= _BV(REAR_LED_PIN);
+    _delay_ms(10);
+    PORTB &= ~_BV(REAR_LED_PIN);
+    _delay_ms(10);
+    PORTB |= _BV(REAR_LED_PIN);
+    _delay_ms(10);
+    PORTB &= ~_BV(REAR_LED_PIN);
   } else {
+    PORTB |= _BV(REAR_LED_PIN);
+    _delay_ms(10);
     PORTB &= ~_BV(REAR_LED_PIN);
   }
 }
@@ -148,6 +160,19 @@ inline LIGHT_STATE calculateNextLightState() {
   return OFF;
 }
 
+inline void enterPowerDownSleep(bool keepWatchdog) {
+  if (!keepWatchdog) {
+    enableWatchdogTimer(false); // for battery saving, as we don't need to track time anyway
+  }
+
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  // sleep_bod_disable(); // is not enabled in fuses
+  sleep_cpu();
+
+  enableWatchdogTimer(true);
+}
+
 int main() {
   configureWatchdogTimer();
   enableWatchdogTimer(true);
@@ -185,8 +210,12 @@ int main() {
       continue;
     }
 
-    // sleep
-    continue;
+    if (_buttonPressed) {
+      enterPowerDownSleep(true); // keep watchdog to make button work
+      continue;
+    }
+
+    enterPowerDownSleep(false);
   }
 
   return 0;

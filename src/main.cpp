@@ -75,20 +75,22 @@ inline void enableFrontLed(bool enable) {
 }
 
 inline void enableRearLed(bool enable) {
+  #define FAKE_CLICK_DELAY 50
+
   // for now we send two clicks to back - to enable
   // then one click - to disable
   // it's hacky - it's just to make it work for now
   if (enable) {
     PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(10);
+    _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
-    _delay_ms(10);
+    _delay_ms(FAKE_CLICK_DELAY);
     PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(10);
+    _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
   } else {
     PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(10);
+    _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
   }
 }

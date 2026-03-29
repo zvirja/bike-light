@@ -5,32 +5,21 @@
 #define FLED_PIN PB0
 #define BTN_PIN PB1
 
-volatile uint16_t _ticks = 0;
 
-volatile uint16_t _buttonPressedAt = 0;
+// Use big value and then we don't care about overflows at all
+volatile uint32_t _ticks = 0;
+
 volatile bool _buttonPressed = false;
-volatile uint16_t _buttonPressedCount = 0;
+volatile uint32_t _buttonPressedAt = 0;
+volatile uint32_t _lastButtonEventAt = 0;
 
-// Is called each 32ms
 ISR(WDT_vect) {
   _ticks++;
 }
 
-// Is called on button down event
-ISR(INT0_vect) {
-  _buttonPressedAt = _ticks;
-  _buttonPressedCount++;
-}
-
 ISR(PCINT0_vect) {
-  if (bit_is_clear(PINB, BTN_PIN)) {
-    _buttonPressedAt = _ticks;
-    _buttonPressed = true;
-  } else {
-    _buttonPressed = false;
-  }
-
-  _buttonPressedCount++;
+  _buttonPressed = true;
+  _buttonPressedAt = _ticks;
 }
 
 inline void startWatchdogTimer() {
@@ -47,7 +36,6 @@ inline void configureWatchdogTimer() {
 }
 
 inline void configureButton() {
-  //GIMSK |= _BV(INT0); // enable INT0
   PCMSK |= _BV(BTN_PIN);
   GIMSK |= _BV(PCIE); // enable pin change interrupt
 
@@ -55,51 +43,54 @@ inline void configureButton() {
   PORTB |= _BV(BTN_PIN); // enable PULL_UP
 }
 
+inline void configureLed() {
+  DDRB |= _BV(FLED_PIN); // set pin OUT
+}
+
 inline bool shouldHandleClick() {
-  uint16_t currentTicks;
-  uint16_t buttonPressedAt;
+  uint32_t currentTicks;
   bool buttonPressed;
+  uint32_t ticksSincePressed;
 
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     currentTicks = _ticks;
-    buttonPressedAt = _buttonPressedAt;
     buttonPressed = _buttonPressed;
+
+    ticksSincePressed = currentTicks - _buttonPressedAt;
   }
 
   if (!buttonPressed) {
     return false;
   }
 
-  uint16_t ticksSince = 0;
-  // handle overflow
-  if (currentTicks < buttonPressedAt) {
-    ticksSince += (INT16_MAX - buttonPressedAt);
-    ticksSince += currentTicks;
-  } else {
-    ticksSince = (currentTicks - buttonPressedAt);
-  }
-
-  // have 64ms debounce
-  if (ticksSince < 2) {
+  // Give time for the click to stabilize and read only afterwards
+  if (ticksSincePressed < 1) {
     return false;
   }
-  
-  // reset click
+
+  // reset click notification
   _buttonPressed = false;
-  return true;
+
+  bool isButtonDown = bit_is_clear(PINB, BTN_PIN); // reversed
+  if (isButtonDown) {
+    ATOMIC_BLOCK(ATOMIC_FORCEON) {
+      _lastButtonEventAt = currentTicks;
+    }
+  }
+
+  return isButtonDown;
 }
 
 int main() {
   configureWatchdogTimer();
   startWatchdogTimer();
   configureButton();
-
-  DDRB |= _BV(FLED_PIN);
+  configureLed();
 
   sei();
 
   while(true) {
-    if (shouldHandleClick() && _buttonPressedCount < 1000) {
+    if (shouldHandleClick()) {
       PINB |= _BV(FLED_PIN);
     }
   }

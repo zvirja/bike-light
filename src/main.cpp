@@ -13,8 +13,8 @@
 #define MODE_SWITCH_WINDOW_TICKS 600 // Around 10s
 static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 9600);
 
-#define DEBOUNCE_DELAY_TICKS 1
-static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 16);
+#define DEBOUNCE_DELAY_TICKS 2
+static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 32);
 
 // Use big value and then we don't care about overflows at all
 volatile uint32_t _ticks = 0;

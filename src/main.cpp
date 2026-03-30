@@ -194,14 +194,12 @@ int main() {
           enableFrontLed(true);
           enableRearLed(true);
           enableBatteryLevelSensor(true);
-
           break;
 
         case OFF:
           enableFrontLed(false);
           enableRearLed(false);
           enableBatteryLevelSensor(false);
-
           break;
       
         default:

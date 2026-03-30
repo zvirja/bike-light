@@ -48,8 +48,8 @@ inline void enableWatchdogTimer(bool enable) {
 }
 
 inline void configureWatchdogTimer() {
-  // WDTCR |= _BV(WDCE); // allow to modify prescaler
-  // WDTCR |= _BV(WDP0); // set prestaler to 32ms
+  WDTCR |= _BV(WDCE); // allow to modify prescaler
+  WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3)); // set prescaler to 16ms
   static_assert(TICK_MS == 16, "Wrong TICK_MS");
 }
 
@@ -84,7 +84,9 @@ inline void enableRearLed(bool enable) {
     PORTB |= _BV(REAR_LED_PIN);
     _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
+
     _delay_ms(FAKE_CLICK_DELAY);
+
     PORTB |= _BV(REAR_LED_PIN);
     _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
@@ -148,7 +150,7 @@ inline LIGHT_STATE calculateNextLightState() {
   }
 
   // Light is ON
-  // If we are more than 10ms - then we just off
+  // If we are long since last click - then we just turn off
   bool skipModeCycling;
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     skipModeCycling = (_ticks - _lastButtonEventAt) > MODE_SWITCH_WINDOW_TICKS;

@@ -21,14 +21,17 @@ static_assert(BTN_PIN == DD4);
 
 #define TICK_MS 16
 
-#define MODE_SWITCH_WINDOW_TICKS 600 // Around 10s
-static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 9600);
+#define MODE_SWITCH_WINDOW_TICKS 1000
+static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 16000);
 
 #define DEBOUNCE_DELAY_TICKS 2
 static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 32);
 
-#define REAR_LIGHT_BLINK_INTERVAL_TICKS 32 // Around 500ms
-static_assert(TICK_MS * REAR_LIGHT_BLINK_INTERVAL_TICKS == 512);
+#define REAR_LIGHT_BLINK_INTERVAL_TICKS 20
+static_assert(TICK_MS * REAR_LIGHT_BLINK_INTERVAL_TICKS == 320);
+
+#define BATTERY_SENSOR_ON_TIMEOUT_TICKS 1875
+static_assert(TICK_MS * BATTERY_SENSOR_ON_TIMEOUT_TICKS == 30000);
 
 // Use big value and then we don't care about overflows at all
 volatile uint32_t _ticks = 0;
@@ -38,6 +41,8 @@ volatile uint32_t _buttonPressedAt = 0;
 volatile uint32_t _lastButtonEventAt = 0;
 
 volatile uint32_t _lastRearLightLastBlinkAt = 0;
+
+volatile uint32_t _enableBatteryLevelModuleExpireAt = 0;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
@@ -79,7 +84,7 @@ inline void configureButton() {
 
 inline void configureFrontLed(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
-  PORTB &= ~_BV(FRONT_LED_PIN); // set LOW
+  PORTB &= ~_BV(FRONT_LED_PIN); 
 }
 
 inline void enableFrontLed(bool enable) {
@@ -92,7 +97,7 @@ inline void enableFrontLed(bool enable) {
 
 inline void configureRearLed() {
   DDRB |= _BV(REAR_LED_PIN); // set as OUT
-  PORTB &= ~_BV(REAR_LED_PIN); // set LOW
+  PORTB &= ~_BV(REAR_LED_PIN);
 }
 
 inline void enableRearLed(bool enable) {
@@ -105,7 +110,7 @@ inline void enableRearLed(bool enable) {
   _lastRearLightLastBlinkAt = _ticks;
 }
 
-inline void blinkRearLed() {
+inline void onTickRearLed() {
   if (_currentLightState == OFF) {
     return;
   }
@@ -128,12 +133,24 @@ inline void blinkRearLed() {
 
 inline void configureBatteryLevelSensor() {
   DDRB |= _BV(BATTERY_LVL_SENSOR_PIN); // set as OUT
+  PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
 }
 
-inline void enableBatteryLevelSensor(bool enable) {
-  if (enable) {
+inline void enableBatteryLevelModuleTemporarily() {
+  ATOMIC_BLOCK(ATOMIC_FORCEON) {
     PORTB |= _BV(BATTERY_LVL_SENSOR_PIN);
-  } else {
+
+    _enableBatteryLevelModuleExpireAt = _ticks + BATTERY_SENSOR_ON_TIMEOUT_TICKS;
+  }
+}
+
+inline void onTickBatteryLevelModule() {
+  ATOMIC_BLOCK(ATOMIC_FORCEON) {
+    if (_enableBatteryLevelModuleExpireAt == 0 || _enableBatteryLevelModuleExpireAt > _ticks) {
+      return;
+    }
+
+    _enableBatteryLevelModuleExpireAt = 0;
     PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
   }
 }
@@ -220,18 +237,20 @@ int main() {
     if (shouldHandleClick()) {
       LIGHT_STATE nextState = calculateNextLightState();
 
+      // enable module for short time after action only to save battery,
+      // as it takes around 100uA in standby mode
+      enableBatteryLevelModuleTemporarily();
+
       switch (nextState)
       {
         case ON:
           enableFrontLed(true);
           enableRearLed(true);
-          enableBatteryLevelSensor(true);
           break;
 
         case OFF:
           enableFrontLed(false);
           enableRearLed(false);
-          enableBatteryLevelSensor(false);
           break;
       
         default:
@@ -242,10 +261,11 @@ int main() {
       continue;
     }
 
-    blinkRearLed();
+    onTickRearLed();
+    onTickBatteryLevelModule();
 
-    // keep watchdog to make button and blinking
-    if (_pendingButtonPressed || _currentLightState != OFF) {
+    // keep watchdog for time-dependent services
+    if (_pendingButtonPressed || _currentLightState != OFF || _enableBatteryLevelModuleExpireAt != 0) {
       enterPowerDownSleep(true); 
       continue;
     }

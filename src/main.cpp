@@ -4,9 +4,20 @@
 #include <util/atomic.h>
 
 #define FRONT_LED_PIN PB1
+static_assert(FRONT_LED_PIN == PIN1);
+static_assert(FRONT_LED_PIN == DD1);
+
 #define REAR_LED_PIN PB0
-#define BATTERY_LVL_SENSOR PB2
+static_assert(REAR_LED_PIN == PIN0);
+static_assert(REAR_LED_PIN == DD0);
+
+#define BATTERY_LVL_SENSOR_PIN PB2
+static_assert(BATTERY_LVL_SENSOR_PIN == PIN2);
+static_assert(BATTERY_LVL_SENSOR_PIN == DD2);
+
 #define BTN_PIN PB4
+static_assert(BTN_PIN == PIN4);
+static_assert(BTN_PIN == DD4);
 
 #define TICK_MS 16
 
@@ -16,12 +27,17 @@ static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 9600);
 #define DEBOUNCE_DELAY_TICKS 2
 static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 32);
 
+#define REAR_LIGHT_BLINK_INTERVAL_TICKS 32 // Around 500ms
+static_assert(TICK_MS * REAR_LIGHT_BLINK_INTERVAL_TICKS == 512);
+
 // Use big value and then we don't care about overflows at all
 volatile uint32_t _ticks = 0;
 
-volatile bool _buttonPressed = false;
+volatile bool _pendingButtonPressed = false;
 volatile uint32_t _buttonPressedAt = 0;
 volatile uint32_t _lastButtonEventAt = 0;
+
+volatile uint32_t _lastRearLightLastBlinkAt = 0;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
@@ -35,7 +51,7 @@ ISR(WDT_vect) {
 }
 
 ISR(PCINT0_vect) {
-  _buttonPressed = true;
+  _pendingButtonPressed = true;
   _buttonPressedAt = _ticks;
 }
 
@@ -61,9 +77,9 @@ inline void configureButton() {
   PORTB |= _BV(BTN_PIN); // enable PULL_UP
 }
 
-inline void configureLed() {
+inline void configureFrontLed(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
-  DDRB |= _BV(REAR_LED_PIN); // set as OUT
+  PORTB &= ~_BV(FRONT_LED_PIN); // set LOW
 }
 
 inline void enableFrontLed(bool enable) {
@@ -74,38 +90,51 @@ inline void enableFrontLed(bool enable) {
   }
 }
 
-inline void enableRearLed(bool enable) {
-  #define FAKE_CLICK_DELAY 50
+inline void configureRearLed() {
+  DDRB |= _BV(REAR_LED_PIN); // set as OUT
+  PORTB &= ~_BV(REAR_LED_PIN); // set LOW
+}
 
-  // for now we send two clicks to back - to enable
-  // then one click - to disable
-  // it's hacky - it's just to make it work for now
+inline void enableRearLed(bool enable) {
   if (enable) {
     PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(FAKE_CLICK_DELAY);
-    PORTB &= ~_BV(REAR_LED_PIN);
-
-    _delay_ms(FAKE_CLICK_DELAY);
-
-    PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(FAKE_CLICK_DELAY);
-    PORTB &= ~_BV(REAR_LED_PIN);
   } else {
-    PORTB |= _BV(REAR_LED_PIN);
-    _delay_ms(FAKE_CLICK_DELAY);
     PORTB &= ~_BV(REAR_LED_PIN);
   }
+
+  _lastRearLightLastBlinkAt = _ticks;
+}
+
+inline void blinkRearLed() {
+  if (_currentLightState == OFF) {
+    return;
+  }
+
+  uint32_t currentTicks;
+  uint32_t ticksSinceLastBlink;
+
+  ATOMIC_BLOCK(ATOMIC_FORCEON) {
+    currentTicks = _ticks;
+    ticksSinceLastBlink = currentTicks - _lastRearLightLastBlinkAt;
+  }
+
+  if (ticksSinceLastBlink < REAR_LIGHT_BLINK_INTERVAL_TICKS) {
+    return;
+  }
+
+   PINB |= _BV(REAR_LED_PIN);
+  _lastRearLightLastBlinkAt = currentTicks;
 }
 
 inline void configureBatteryLevelSensor() {
-  DDRB |= _BV(BATTERY_LVL_SENSOR); // set as OUT
+  DDRB |= _BV(BATTERY_LVL_SENSOR_PIN); // set as OUT
 }
 
 inline void enableBatteryLevelSensor(bool enable) {
   if (enable) {
-    PORTB |= _BV(BATTERY_LVL_SENSOR);
+    PORTB |= _BV(BATTERY_LVL_SENSOR_PIN);
   } else {
-    PORTB &= ~_BV(BATTERY_LVL_SENSOR);
+    PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
   }
 }
 
@@ -116,7 +145,7 @@ inline bool shouldHandleClick() {
 
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     currentTicks = _ticks;
-    buttonPressed = _buttonPressed;
+    buttonPressed = _pendingButtonPressed;
 
     ticksSincePressed = currentTicks - _buttonPressedAt;
   }
@@ -131,7 +160,7 @@ inline bool shouldHandleClick() {
   }
 
   // reset click notification
-  _buttonPressed = false;
+  _pendingButtonPressed = false;
 
   bool isButtonDown = bit_is_clear(PINB, BTN_PIN); // reversed
   if (isButtonDown) {
@@ -181,7 +210,8 @@ int main() {
   configureWatchdogTimer();
   enableWatchdogTimer(true);
   configureButton();
-  configureLed();
+  configureFrontLed();
+  configureRearLed();
   configureBatteryLevelSensor();
 
   sei();
@@ -212,8 +242,11 @@ int main() {
       continue;
     }
 
-    if (_buttonPressed) {
-      enterPowerDownSleep(true); // keep watchdog to make button work
+    blinkRearLed();
+
+    // keep watchdog to make button and blinking
+    if (_pendingButtonPressed || _currentLightState != OFF) {
+      enterPowerDownSleep(true); 
       continue;
     }
 

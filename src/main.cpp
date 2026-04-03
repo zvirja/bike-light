@@ -29,7 +29,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 
 #define MODE_SWITCH_WINDOW_MS 15000
 
-#define DEBOUNCE_DELAY_MS 32
+#define BUTTON_DEBOUNCE_DELAY_MS 32
 
 #define REAR_LIGHT_BLINK_INTERVAL_MS 250
 
@@ -43,14 +43,16 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 volatile uint32_t _ticks = 0;
 
 volatile bool _pendingButtonPressed = false;
-volatile uint32_t _buttonPressedAt = 0;
+volatile uint8_t _buttonDebounceTicksRemaining = 0;
+static_assert(MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS) < UINT8_MAX);
+
 volatile uint32_t _lastButtonEventAt = 0;
 
-volatile int8_t _rearLightBlinkTicksRemaining = 0;
+volatile uint8_t _rearLightBlinkTicksRemaining = 0;
 static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) <= UINT8_MAX);
 
 volatile bool _enableBatteryLevelModule = false;
-volatile int16_t _enableBatteryLevelModuleTicksRemaining = 0;
+volatile uint16_t _enableBatteryLevelModuleTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS) <= UINT16_MAX);
 
 volatile uint16_t _batteryLevelMeasuringResult = 0;
@@ -64,16 +66,18 @@ volatile LIGHT_STATE _currentLightState = OFF;
 
 inline void onTickRearLight();
 inline void onTickBatteryLevelModule();
+inline void onTickButton();
 
 ISR(WDT_vect) {
   _ticks++;
   onTickRearLight();
   onTickBatteryLevelModule();
+  onTickButton();
 }
 
 ISR(PCINT0_vect) {
   _pendingButtonPressed = true;
-  _buttonPressedAt = _ticks;
+  _buttonDebounceTicksRemaining = MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS);
 }
 
 ISR(ADC_vect) {
@@ -102,6 +106,12 @@ void configureButton() {
 
   DDRB &= ~_BV(BTN_PIN); // set as INPUT
   PORTB |= _BV(BTN_PIN); // enable PULL_UP
+}
+
+void onTickButton() {
+  if (_buttonDebounceTicksRemaining > 0) {
+    _buttonDebounceTicksRemaining--;
+  }
 }
 
 void configureFrontLight(){
@@ -233,23 +243,8 @@ void onLoopBatteryLevelMeasuring() {
 }
 
 bool shouldHandleClick() {
-  uint32_t currentTicks;
-  bool buttonPressed;
-  uint32_t ticksSincePressed;
-
-  ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    currentTicks = _ticks;
-    buttonPressed = _pendingButtonPressed;
-
-    ticksSincePressed = currentTicks - _buttonPressedAt;
-  }
-
-  if (!buttonPressed) {
-    return false;
-  }
-
   // Give time for the click to stabilize and read only afterwards
-  if (ticksSincePressed < MS_TO_TICKS(DEBOUNCE_DELAY_MS)) {
+  if (!_pendingButtonPressed || _buttonDebounceTicksRemaining > 0) {
     return false;
   }
 
@@ -259,7 +254,7 @@ bool shouldHandleClick() {
   bool isButtonDown = bit_is_clear(PINB, BTN_PIN); // reversed
   if (isButtonDown) {
     ATOMIC_BLOCK(ATOMIC_FORCEON) {
-      _lastButtonEventAt = currentTicks;
+      _lastButtonEventAt = _ticks;
     }
   }
 

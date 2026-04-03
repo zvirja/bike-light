@@ -11,9 +11,9 @@ static_assert(FRONT_LED_PIN == DD1);
 static_assert(REAR_LED_PIN == PIN0);
 static_assert(REAR_LED_PIN == DD0);
 
-#define BATTERY_LVL_SENSOR_PIN PB2
-static_assert(BATTERY_LVL_SENSOR_PIN == PIN2);
-static_assert(BATTERY_LVL_SENSOR_PIN == DD2);
+#define BATTERY_LVL_MODULE_PIN PB2
+static_assert(BATTERY_LVL_MODULE_PIN == PIN2);
+static_assert(BATTERY_LVL_MODULE_PIN == DD2);
 
 #define BTN_PIN PB4
 static_assert(BTN_PIN == PIN4);
@@ -80,8 +80,9 @@ void enableWatchdogTimer(bool enable) {
 }
 
 void configureWatchdogTimer() {
-  WDTCR |= _BV(WDCE); // allow to modify prescaler
-  WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3)); // set prescaler to 16ms
+  // keep default 16ms prescaler
+  // WDTCR |= _BV(WDCE); // allow to modify prescaler
+  // WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3));
   static_assert(TICK_MS == 16);
 }
 
@@ -95,7 +96,7 @@ void configureButton() {
 
 void configureFrontLed(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
-  PORTB &= ~_BV(FRONT_LED_PIN); 
+  // PORTB &= ~_BV(FRONT_LED_PIN); 
 }
 
 void enableFrontLed(bool enable) {
@@ -108,7 +109,7 @@ void enableFrontLed(bool enable) {
 
 void configureRearLed() {
   DDRB |= _BV(REAR_LED_PIN); // set as OUT
-  PORTB &= ~_BV(REAR_LED_PIN);
+  // PORTB &= ~_BV(REAR_LED_PIN);
 }
 
 void enableRearLed(bool enable) {
@@ -142,14 +143,14 @@ void onTickRearLed() {
   _lastRearLightLastBlinkAt = currentTicks;
 }
 
-void configureBatteryLevelSensor() {
-  DDRB |= _BV(BATTERY_LVL_SENSOR_PIN); // set as OUT
-  PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
+void setupBatteryLevelModule() {
+  DDRB |= _BV(BATTERY_LVL_MODULE_PIN); // set as OUT
+  PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
 }
 
 void enableBatteryLevelModuleTemporarily() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    PORTB |= _BV(BATTERY_LVL_SENSOR_PIN);
+    PORTB |= _BV(BATTERY_LVL_MODULE_PIN);
 
     _enableBatteryLevelModuleExpireAt = _ticks + BATTERY_SENSOR_ON_TIMEOUT_TICKS;
   }
@@ -162,7 +163,7 @@ void onTickBatteryLevelModule() {
     }
 
     _enableBatteryLevelModuleExpireAt = 0;
-    PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
+    PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
   }
 }
 
@@ -294,7 +295,7 @@ int main() {
   configureButton();
   configureFrontLed();
   configureRearLed();
-  configureBatteryLevelSensor();
+  setupBatteryLevelModule();
   configureBatteryLevelMeasuring();
 
   sei();

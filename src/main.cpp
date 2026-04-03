@@ -21,17 +21,13 @@ static_assert(BTN_PIN == DD4);
 
 #define TICK_MS 16
 
-#define MODE_SWITCH_WINDOW_TICKS 1000
-static_assert(TICK_MS * MODE_SWITCH_WINDOW_TICKS == 16000);
+#define MODE_SWITCH_WINDOW_MS 15000
 
-#define DEBOUNCE_DELAY_TICKS 2
-static_assert(TICK_MS * DEBOUNCE_DELAY_TICKS == 32);
+#define DEBOUNCE_DELAY_MS 32
 
-#define REAR_LIGHT_BLINK_INTERVAL_TICKS 20
-static_assert(TICK_MS * REAR_LIGHT_BLINK_INTERVAL_TICKS == 320);
+#define REAR_LIGHT_BLINK_INTERVAL_MS 250
 
-#define BATTERY_SENSOR_ON_TIMEOUT_TICKS 1875
-static_assert(TICK_MS * BATTERY_SENSOR_ON_TIMEOUT_TICKS == 30000);
+#define BATTERY_SENSOR_ON_TIMEOUT_MS 30000
 
 #define BATTERY_LEVEL_LOW_TRESHOLD 740 // Shall be around 3V
 #define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
@@ -56,6 +52,12 @@ enum LIGHT_STATE : uint8_t {
 };
 
 volatile LIGHT_STATE _currentLightState = OFF;
+
+/// @brief Convert milliseconds to ticks
+constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
+  // round up
+  return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
+}
 
 ISR(WDT_vect) {
   _ticks++;
@@ -135,7 +137,7 @@ void onTickRearLed() {
     ticksSinceLastBlink = currentTicks - _lastRearLightLastBlinkAt;
   }
 
-  if (ticksSinceLastBlink < REAR_LIGHT_BLINK_INTERVAL_TICKS) {
+  if (ticksSinceLastBlink < MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS)) {
     return;
   }
 
@@ -152,7 +154,7 @@ void enableBatteryLevelModuleTemporarily() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     PORTB |= _BV(BATTERY_LVL_MODULE_PIN);
 
-    _enableBatteryLevelModuleExpireAt = _ticks + BATTERY_SENSOR_ON_TIMEOUT_TICKS;
+    _enableBatteryLevelModuleExpireAt = _ticks + MS_TO_TICKS(BATTERY_SENSOR_ON_TIMEOUT_MS);
   }
 }
 
@@ -238,7 +240,7 @@ bool shouldHandleClick() {
   }
 
   // Give time for the click to stabilize and read only afterwards
-  if (ticksSincePressed < DEBOUNCE_DELAY_TICKS) {
+  if (ticksSincePressed < MS_TO_TICKS(DEBOUNCE_DELAY_MS)) {
     return false;
   }
 
@@ -265,7 +267,7 @@ LIGHT_STATE calculateNextLightState() {
   // If we are long since last click - then we just turn off
   bool skipModeCycling;
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    skipModeCycling = (_ticks - _lastButtonEventAt) > MODE_SWITCH_WINDOW_TICKS;
+    skipModeCycling = (_ticks - _lastButtonEventAt) > MS_TO_TICKS(MODE_SWITCH_WINDOW_MS);
   }
 
   if (skipModeCycling) {

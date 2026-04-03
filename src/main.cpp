@@ -53,6 +53,7 @@ volatile bool _enableBatteryLevelModule = false;
 volatile uint16_t _enableBatteryLevelModuleTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS) <= UINT16_MAX);
 
+volatile bool _pendingBatteryLevelMeasuringResult = false;
 volatile uint16_t _batteryLevelMeasuringResult = 0;
 
 enum LIGHT_STATE : uint8_t {
@@ -80,6 +81,7 @@ ISR(PCINT0_vect) {
 ISR(ADC_vect) {
   _batteryLevelMeasuringResult = ADCL;
   _batteryLevelMeasuringResult |= ADCH << 8;
+  _pendingBatteryLevelMeasuringResult = true;
 }
 
 void enableWatchdogTimer(bool enable) {
@@ -191,14 +193,18 @@ bool needTickBatteryLevelModule() {
 }
 
 void onLoopBatteryLevelModule() {
+  if (!_enableBatteryLevelModule) {
+    return;
+  }
+
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    if (!_enableBatteryLevelModule || _enableBatteryLevelModuleTicksRemaining > 0) {
+    if (_enableBatteryLevelModuleTicksRemaining > 0) {
       return;
     }
-
-    _enableBatteryLevelModule = false;
-    PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
   }
+
+  _enableBatteryLevelModule = false;
+  PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
 }
 
 // wired resistors are 3.3kOm and 10kOm
@@ -225,19 +231,15 @@ void startBatteryLevelMeasuring() {
 }
 
 void onLoopBatteryLevelMeasuring() {
-  int16_t batteryLevel;
-  ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    batteryLevel = _batteryLevelMeasuringResult;
-  }
-
-  if (batteryLevel == 0) {
+  if (!_pendingBatteryLevelMeasuringResult) {
     return;
   }
 
-  ADCSRA &= ~_BV(ADEN); // disable ADC, as we got the result
-  _batteryLevelMeasuringResult = 0; // reset, as we handle it here
+  _pendingBatteryLevelMeasuringResult = false; // reset, as we handle it here
 
-  if (batteryLevel > BATTERY_LEVEL_LOW_TRESHOLD) {
+  ADCSRA &= ~_BV(ADEN); // disable ADC, as we got the result
+
+  if (_batteryLevelMeasuringResult > BATTERY_LEVEL_LOW_TRESHOLD) {
     return;
   }
 

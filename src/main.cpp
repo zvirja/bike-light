@@ -115,6 +115,10 @@ void onTickButton() {
   }
 }
 
+bool needTickButton() {
+  return _pendingButtonPressed;
+}
+
 void configureFrontLight(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
   // PORTB &= ~_BV(FRONT_LED_PIN); 
@@ -149,6 +153,10 @@ void onTickRearLight() {
   }
 }
 
+bool needTickRearLight() {
+  return _currentLightState != OFF;
+}
+
 void onLoopRearLight() {
   if (_currentLightState == OFF || _rearLightBlinkTicksRemaining > 0) {
     return;
@@ -158,7 +166,7 @@ void onLoopRearLight() {
   _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
 }
 
-void setupBatteryLevelModule() {
+void configureBatteryLevelModule() {
   DDRB |= _BV(BATTERY_LVL_MODULE_PIN); // set as OUT
   PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
 }
@@ -176,6 +184,10 @@ void onTickBatteryLevelModule() {
   if (_enableBatteryLevelModule && _enableBatteryLevelModuleTicksRemaining > 0) {
     _enableBatteryLevelModuleTicksRemaining--; 
   }
+}
+
+bool needTickBatteryLevelModule() {
+  return _enableBatteryLevelModule;
 }
 
 void onLoopBatteryLevelModule() {
@@ -295,7 +307,7 @@ int main() {
   configureButton();
   configureFrontLight();
   configureRearLight();
-  setupBatteryLevelModule();
+  configureBatteryLevelModule();
   configureBatteryLevelMeasuring();
 
   sei();
@@ -333,15 +345,12 @@ int main() {
     onLoopBatteryLevelModule();
     onLoopBatteryLevelMeasuring();
 
-    // keep watchdog for time-dependent services
-    if (_pendingButtonPressed
-      || _currentLightState != OFF
-      || _enableBatteryLevelModule) {
-      enterPowerDownSleep(true); 
-      continue;
+    bool keepWatchdog = false;
+    if (needTickButton() || needTickRearLight() || needTickBatteryLevelModule()) {
+        keepWatchdog = true;
     }
 
-    enterPowerDownSleep(false);
+    enterPowerDownSleep(keepWatchdog);
   }
 
   return 0;

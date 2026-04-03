@@ -27,7 +27,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
   return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
 }
 
-#define MODE_SWITCH_WINDOW_MS 15000
+#define MODE_CYCLE_WINDOW_MS 4000
 
 #define BUTTON_DEBOUNCE_DELAY_MS 32
 
@@ -39,14 +39,12 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 #define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
 #define BATTERY_LEVEL_LOW_BLINK_COUNT 3
 
-// Use big value and then we don't care about overflows at all
-volatile uint32_t _ticks = 0;
-
 volatile bool _pendingButtonPressed = false;
 volatile uint8_t _buttonDebounceTicksRemaining = 0;
-static_assert(MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS) < UINT8_MAX);
+static_assert(MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS) <= UINT8_MAX);
 
-volatile uint32_t _lastButtonEventAt = 0;
+volatile uint8_t _modeCycleTicksRemaining = 0;
+static_assert(MS_TO_TICKS(MODE_CYCLE_WINDOW_MS) <= UINT8_MAX);
 
 volatile uint8_t _rearLightBlinkTicksRemaining = 0;
 static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) <= UINT8_MAX);
@@ -69,7 +67,6 @@ inline void onTickBatteryLevelModule();
 inline void onTickButton();
 
 ISR(WDT_vect) {
-  _ticks++;
   onTickRearLight();
   onTickBatteryLevelModule();
   onTickButton();
@@ -109,6 +106,10 @@ void configureButton() {
 }
 
 void onTickButton() {
+  if (_modeCycleTicksRemaining > 0) {
+    _modeCycleTicksRemaining--;
+  }
+
   if (_buttonDebounceTicksRemaining > 0) {
     _buttonDebounceTicksRemaining--;
   }
@@ -253,9 +254,7 @@ bool shouldHandleClick() {
 
   bool isButtonDown = bit_is_clear(PINB, BTN_PIN); // reversed
   if (isButtonDown) {
-    ATOMIC_BLOCK(ATOMIC_FORCEON) {
-      _lastButtonEventAt = _ticks;
-    }
+    _modeCycleTicksRemaining = MS_TO_TICKS(MODE_CYCLE_WINDOW_MS);
   }
 
   return isButtonDown;
@@ -268,13 +267,8 @@ LIGHT_STATE calculateNextLightState() {
   }
 
   // Light is ON
-  // If we are long since last click - then we just turn off
-  bool skipModeCycling;
-  ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    skipModeCycling = (_ticks - _lastButtonEventAt) > MS_TO_TICKS(MODE_SWITCH_WINDOW_MS);
-  }
-
-  if (skipModeCycling) {
+  bool cycleLightModes = _modeCycleTicksRemaining > 0;
+  if (!cycleLightModes) {
     return OFF;
   }
 

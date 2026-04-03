@@ -33,6 +33,10 @@ static_assert(TICK_MS * REAR_LIGHT_BLINK_INTERVAL_TICKS == 320);
 #define BATTERY_SENSOR_ON_TIMEOUT_TICKS 1875
 static_assert(TICK_MS * BATTERY_SENSOR_ON_TIMEOUT_TICKS == 30000);
 
+#define BATTERY_LEVEL_LOW_TRESHOLD 740 // Shall be around 3V
+#define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
+#define BATTERY_LEVEL_LOW_BLINK_COUNT 3
+
 // Use big value and then we don't care about overflows at all
 volatile uint32_t _ticks = 0;
 
@@ -43,6 +47,8 @@ volatile uint32_t _lastButtonEventAt = 0;
 volatile uint32_t _lastRearLightLastBlinkAt = 0;
 
 volatile uint32_t _enableBatteryLevelModuleExpireAt = 0;
+
+volatile uint16_t _batteryLevelMeasuringResult = 0;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
@@ -60,7 +66,12 @@ ISR(PCINT0_vect) {
   _buttonPressedAt = _ticks;
 }
 
-inline void enableWatchdogTimer(bool enable) {
+ISR(ADC_vect) {
+  _batteryLevelMeasuringResult = ADCL;
+  _batteryLevelMeasuringResult |= ADCH << 8;
+}
+
+void enableWatchdogTimer(bool enable) {
   if (enable) {
     WDTCR |= _BV(WDTIE);
   } else {
@@ -68,13 +79,13 @@ inline void enableWatchdogTimer(bool enable) {
   }
 }
 
-inline void configureWatchdogTimer() {
+void configureWatchdogTimer() {
   WDTCR |= _BV(WDCE); // allow to modify prescaler
   WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3)); // set prescaler to 16ms
-  static_assert(TICK_MS == 16, "Wrong TICK_MS");
+  static_assert(TICK_MS == 16);
 }
 
-inline void configureButton() {
+void configureButton() {
   PCMSK |= _BV(BTN_PIN);
   GIMSK |= _BV(PCIE); // enable pin change interrupt
 
@@ -82,12 +93,12 @@ inline void configureButton() {
   PORTB |= _BV(BTN_PIN); // enable PULL_UP
 }
 
-inline void configureFrontLed(){
+void configureFrontLed(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
   PORTB &= ~_BV(FRONT_LED_PIN); 
 }
 
-inline void enableFrontLed(bool enable) {
+void enableFrontLed(bool enable) {
   if (enable) {
     PORTB |= _BV(FRONT_LED_PIN);
   } else {
@@ -95,12 +106,12 @@ inline void enableFrontLed(bool enable) {
   }
 }
 
-inline void configureRearLed() {
+void configureRearLed() {
   DDRB |= _BV(REAR_LED_PIN); // set as OUT
   PORTB &= ~_BV(REAR_LED_PIN);
 }
 
-inline void enableRearLed(bool enable) {
+void enableRearLed(bool enable) {
   if (enable) {
     PORTB |= _BV(REAR_LED_PIN);
   } else {
@@ -110,7 +121,7 @@ inline void enableRearLed(bool enable) {
   _lastRearLightLastBlinkAt = _ticks;
 }
 
-inline void onTickRearLed() {
+void onTickRearLed() {
   if (_currentLightState == OFF) {
     return;
   }
@@ -131,12 +142,12 @@ inline void onTickRearLed() {
   _lastRearLightLastBlinkAt = currentTicks;
 }
 
-inline void configureBatteryLevelSensor() {
+void configureBatteryLevelSensor() {
   DDRB |= _BV(BATTERY_LVL_SENSOR_PIN); // set as OUT
   PORTB &= ~_BV(BATTERY_LVL_SENSOR_PIN);
 }
 
-inline void enableBatteryLevelModuleTemporarily() {
+void enableBatteryLevelModuleTemporarily() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     PORTB |= _BV(BATTERY_LVL_SENSOR_PIN);
 
@@ -144,7 +155,7 @@ inline void enableBatteryLevelModuleTemporarily() {
   }
 }
 
-inline void onTickBatteryLevelModule() {
+void onTickBatteryLevelModule() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     if (_enableBatteryLevelModuleExpireAt == 0 || _enableBatteryLevelModuleExpireAt > _ticks) {
       return;
@@ -155,7 +166,61 @@ inline void onTickBatteryLevelModule() {
   }
 }
 
-inline bool shouldHandleClick() {
+// wired resistors are 3.3kOm and 10kOm
+// connected PB3
+void configureBatteryLevelMeasuring() {
+  ADMUX |= _BV(REFS0); // internal 1.1V voltage reference
+  ADMUX |= _BV(MUX0) | _BV(MUX1); // Pin PB3
+
+  ADCSRA |= _BV(ADIE); // enable ADC Conversion interrupt
+  ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2); // set prescaler to /128 for the best accuracy
+}
+
+void startBatteryLevelMeasuring() {
+  ADCSRA |= _BV(ADEN); // enable ADC
+  _delay_ms(50); // to stabilize and charge the capacitor
+
+  _batteryLevelMeasuringResult = 0;
+
+  // Sleep for better measurements
+  // It will automatically start measure
+  set_sleep_mode(SLEEP_MODE_ADC);
+  sleep_enable();
+  sleep_cpu();
+}
+
+void onTickBatteryLevelMeasuring() {
+  int16_t batteryLevel;
+  ATOMIC_BLOCK(ATOMIC_FORCEON) {
+    batteryLevel = _batteryLevelMeasuringResult;
+  }
+
+  if (batteryLevel == 0) {
+    return;
+  }
+
+  ADCSRA &= ~_BV(ADEN); // disable ADC, as we got the result
+  _batteryLevelMeasuringResult = 0; // reset, as we handle it here
+
+  if (batteryLevel > BATTERY_LEVEL_LOW_TRESHOLD) {
+    return;
+  }
+
+  _delay_ms(100); // to give impression that light was off before blinking
+
+  // if battery is discharged, notify with blinking
+  for (uint8_t i = 0; i < BATTERY_LEVEL_LOW_BLINK_COUNT; i++) {
+    _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
+    enableFrontLed(true);
+    enableRearLed(true);
+
+    _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
+    enableFrontLed(false);
+    enableRearLed(false);
+  }
+}
+
+bool shouldHandleClick() {
   uint32_t currentTicks;
   bool buttonPressed;
   uint32_t ticksSincePressed;
@@ -189,7 +254,7 @@ inline bool shouldHandleClick() {
   return isButtonDown;
 }
 
-inline LIGHT_STATE calculateNextLightState() {
+LIGHT_STATE calculateNextLightState() {
   LIGHT_STATE currentLightState = _currentLightState;
   if (currentLightState == OFF) {
     return ON;
@@ -210,7 +275,7 @@ inline LIGHT_STATE calculateNextLightState() {
   return OFF;
 }
 
-inline void enterPowerDownSleep(bool keepWatchdog) {
+void enterPowerDownSleep(bool keepWatchdog) {
   if (!keepWatchdog) {
     enableWatchdogTimer(false); // for battery saving, as we don't need to track time anyway
   }
@@ -230,6 +295,7 @@ int main() {
   configureFrontLed();
   configureRearLed();
   configureBatteryLevelSensor();
+  configureBatteryLevelMeasuring();
 
   sei();
 
@@ -251,6 +317,7 @@ int main() {
         case OFF:
           enableFrontLed(false);
           enableRearLed(false);
+          startBatteryLevelMeasuring();
           break;
       
         default:
@@ -263,9 +330,14 @@ int main() {
 
     onTickRearLed();
     onTickBatteryLevelModule();
+    // TODO.
+    // For now it does not work, as it always triggers due to some reason :-/
+    onTickBatteryLevelMeasuring();
 
     // keep watchdog for time-dependent services
-    if (_pendingButtonPressed || _currentLightState != OFF || _enableBatteryLevelModuleExpireAt != 0) {
+    if (_pendingButtonPressed
+      || _currentLightState != OFF
+      || _enableBatteryLevelModuleExpireAt != 0) {
       enterPowerDownSleep(true); 
       continue;
     }

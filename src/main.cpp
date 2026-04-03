@@ -33,7 +33,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 
 #define REAR_LIGHT_BLINK_INTERVAL_MS 250
 
-#define BATTERY_SENSOR_ON_TIMEOUT_MS 30000
+#define BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS 30000
 
 #define BATTERY_LEVEL_LOW_TRESHOLD 740 // Shall be around 3V
 #define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
@@ -47,9 +47,11 @@ volatile uint32_t _buttonPressedAt = 0;
 volatile uint32_t _lastButtonEventAt = 0;
 
 volatile int8_t _rearLightBlinkTicksRemaining = 0;
-static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) < 255);
+static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) <= UINT8_MAX);
 
-volatile uint32_t _enableBatteryLevelModuleExpireAt = 0;
+volatile bool _enableBatteryLevelModule = false;
+volatile int16_t _enableBatteryLevelModuleTicksRemaining = 0;
+static_assert(MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS) <= UINT16_MAX);
 
 volatile uint16_t _batteryLevelMeasuringResult = 0;
 
@@ -61,10 +63,12 @@ enum LIGHT_STATE : uint8_t {
 volatile LIGHT_STATE _currentLightState = OFF;
 
 inline void onTickRearLight();
+inline void onTickBatteryLevelModule();
 
 ISR(WDT_vect) {
   _ticks++;
   onTickRearLight();
+  onTickBatteryLevelModule();
 }
 
 ISR(PCINT0_vect) {
@@ -152,17 +156,24 @@ void enableBatteryLevelModuleTemporarily() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     PORTB |= _BV(BATTERY_LVL_MODULE_PIN);
 
-    _enableBatteryLevelModuleExpireAt = _ticks + MS_TO_TICKS(BATTERY_SENSOR_ON_TIMEOUT_MS);
+    _enableBatteryLevelModule = true;
+    _enableBatteryLevelModuleTicksRemaining = MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS);
   }
 }
 
 void onTickBatteryLevelModule() {
+  if (_enableBatteryLevelModule && _enableBatteryLevelModuleTicksRemaining > 0) {
+    _enableBatteryLevelModuleTicksRemaining--; 
+  }
+}
+
+void onLoopBatteryLevelModule() {
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    if (_enableBatteryLevelModuleExpireAt == 0 || _enableBatteryLevelModuleExpireAt > _ticks) {
+    if (!_enableBatteryLevelModule || _enableBatteryLevelModuleTicksRemaining > 0) {
       return;
     }
 
-    _enableBatteryLevelModuleExpireAt = 0;
+    _enableBatteryLevelModule = false;
     PORTB &= ~_BV(BATTERY_LVL_MODULE_PIN);
   }
 }
@@ -190,7 +201,7 @@ void startBatteryLevelMeasuring() {
   sleep_cpu();
 }
 
-void onTickBatteryLevelMeasuring() {
+void onLoopBatteryLevelMeasuring() {
   int16_t batteryLevel;
   ATOMIC_BLOCK(ATOMIC_FORCEON) {
     batteryLevel = _batteryLevelMeasuringResult;
@@ -330,13 +341,13 @@ int main() {
     }
 
     onLoopRearLight();
-    onTickBatteryLevelModule();
-    onTickBatteryLevelMeasuring();
+    onLoopBatteryLevelModule();
+    onLoopBatteryLevelMeasuring();
 
     // keep watchdog for time-dependent services
     if (_pendingButtonPressed
       || _currentLightState != OFF
-      || _enableBatteryLevelModuleExpireAt != 0) {
+      || _enableBatteryLevelModule) {
       enterPowerDownSleep(true); 
       continue;
     }

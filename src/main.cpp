@@ -21,6 +21,12 @@ static_assert(BTN_PIN == DD4);
 
 #define TICK_MS 16
 
+/// @brief Convert milliseconds to ticks
+constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
+  // round up
+  return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
+}
+
 #define MODE_SWITCH_WINDOW_MS 15000
 
 #define DEBOUNCE_DELAY_MS 32
@@ -40,7 +46,8 @@ volatile bool _pendingButtonPressed = false;
 volatile uint32_t _buttonPressedAt = 0;
 volatile uint32_t _lastButtonEventAt = 0;
 
-volatile uint32_t _lastRearLightLastBlinkAt = 0;
+volatile int8_t _rearLightBlinkTicksRemaining = 0;
+static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) < 255);
 
 volatile uint32_t _enableBatteryLevelModuleExpireAt = 0;
 
@@ -53,14 +60,11 @@ enum LIGHT_STATE : uint8_t {
 
 volatile LIGHT_STATE _currentLightState = OFF;
 
-/// @brief Convert milliseconds to ticks
-constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
-  // round up
-  return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
-}
+inline void onTickRearLight();
 
 ISR(WDT_vect) {
   _ticks++;
+  onTickRearLight();
 }
 
 ISR(PCINT0_vect) {
@@ -96,12 +100,12 @@ void configureButton() {
   PORTB |= _BV(BTN_PIN); // enable PULL_UP
 }
 
-void configureFrontLed(){
+void configureFrontLight(){
   DDRB |= _BV(FRONT_LED_PIN); // set as OUT
   // PORTB &= ~_BV(FRONT_LED_PIN); 
 }
 
-void enableFrontLed(bool enable) {
+void enableFrontLight(bool enable) {
   if (enable) {
     PORTB |= _BV(FRONT_LED_PIN);
   } else {
@@ -109,40 +113,34 @@ void enableFrontLed(bool enable) {
   }
 }
 
-void configureRearLed() {
+void configureRearLight() {
   DDRB |= _BV(REAR_LED_PIN); // set as OUT
   // PORTB &= ~_BV(REAR_LED_PIN);
 }
 
-void enableRearLed(bool enable) {
+void enableRearLight(bool enable) {
   if (enable) {
     PORTB |= _BV(REAR_LED_PIN);
   } else {
     PORTB &= ~_BV(REAR_LED_PIN);
   }
 
-  _lastRearLightLastBlinkAt = _ticks;
+  _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
 }
 
-void onTickRearLed() {
-  if (_currentLightState == OFF) {
-    return;
+void onTickRearLight() {
+  if(_rearLightBlinkTicksRemaining > 0){
+    _rearLightBlinkTicksRemaining--;
   }
+}
 
-  uint32_t currentTicks;
-  uint32_t ticksSinceLastBlink;
-
-  ATOMIC_BLOCK(ATOMIC_FORCEON) {
-    currentTicks = _ticks;
-    ticksSinceLastBlink = currentTicks - _lastRearLightLastBlinkAt;
-  }
-
-  if (ticksSinceLastBlink < MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS)) {
+void onLoopRearLight() {
+  if (_currentLightState == OFF || _rearLightBlinkTicksRemaining > 0) {
     return;
   }
 
    PINB |= _BV(REAR_LED_PIN);
-  _lastRearLightLastBlinkAt = currentTicks;
+  _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
 }
 
 void setupBatteryLevelModule() {
@@ -214,12 +212,12 @@ void onTickBatteryLevelMeasuring() {
   // if battery is discharged, notify with blinking
   for (uint8_t i = 0; i < BATTERY_LEVEL_LOW_BLINK_COUNT; i++) {
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
-    enableFrontLed(true);
-    enableRearLed(true);
+    enableFrontLight(true);
+    enableRearLight(true);
 
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
-    enableFrontLed(false);
-    enableRearLed(false);
+    enableFrontLight(false);
+    enableRearLight(false);
   }
 }
 
@@ -295,8 +293,8 @@ int main() {
   configureWatchdogTimer();
   enableWatchdogTimer(true);
   configureButton();
-  configureFrontLed();
-  configureRearLed();
+  configureFrontLight();
+  configureRearLight();
   setupBatteryLevelModule();
   configureBatteryLevelMeasuring();
 
@@ -313,13 +311,13 @@ int main() {
       switch (nextState)
       {
         case ON:
-          enableFrontLed(true);
-          enableRearLed(true);
+          enableFrontLight(true);
+          enableRearLight(true);
           break;
 
         case OFF:
-          enableFrontLed(false);
-          enableRearLed(false);
+          enableFrontLight(false);
+          enableRearLight(false);
           startBatteryLevelMeasuring();
           break;
       
@@ -331,7 +329,7 @@ int main() {
       continue;
     }
 
-    onTickRearLed();
+    onLoopRearLight();
     onTickBatteryLevelModule();
     onTickBatteryLevelMeasuring();
 

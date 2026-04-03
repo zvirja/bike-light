@@ -330,8 +330,6 @@ int main() {
 
     onTickRearLed();
     onTickBatteryLevelModule();
-    // TODO.
-    // For now it does not work, as it always triggers due to some reason :-/
     onTickBatteryLevelMeasuring();
 
     // keep watchdog for time-dependent services

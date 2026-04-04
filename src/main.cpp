@@ -7,9 +7,17 @@
 static_assert(FRONT_LED_PIN == PIN1);
 static_assert(FRONT_LED_PIN == DD1);
 
+#define FRONT_LED_PWM_LEVEL 150
+#define FRONT_LED_PWM_TIMER_COMPARE_REGISTER OCR0B
+#define FRONT_LED_PWM_TIMER_TCCR0A_MASK (_BV(COM0B1))
+
 #define REAR_LED_PIN PB0
 static_assert(REAR_LED_PIN == PIN0);
 static_assert(REAR_LED_PIN == DD0);
+
+#define REAR_LED_PWM_LEVEL 100
+#define REAR_LED_PWM_TIMER_COMPARE_REGISTER OCR0A
+#define REAR_LED_PWM_TIMER_TCCR0A_MASK (_BV(COM0A1))
 
 #define BATTERY_LVL_MODULE_PIN PB2
 static_assert(BATTERY_LVL_MODULE_PIN == PIN2);
@@ -58,10 +66,21 @@ volatile uint16_t _batteryLevelMeasuringResult = 0;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
-  ON
+  ON,
+  DIMMED
+};
+
+enum SLEEP_LEVEL : uint8_t {
+  FULL_SLEEP,
+  WATCHDOG_ONLY,
+  IDLE
 };
 
 volatile LIGHT_STATE _currentLightState = OFF;
+
+volatile bool _frontLedPwmOn = false;
+volatile bool _rearLedPwmOn = false;
+volatile bool _rearLedBlinkOn = false;
 
 inline void onTickRearLight();
 inline void onTickBatteryLevelModule();
@@ -84,6 +103,13 @@ ISR(ADC_vect) {
   _pendingBatteryLevelMeasuringResult = true;
 }
 
+void configureWatchdogTimer() {
+  // keep default 16ms prescaler
+  // WDTCR |= _BV(WDCE); // allow to modify prescaler
+  // WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3));
+  static_assert(TICK_MS == 16);
+}
+
 void enableWatchdogTimer(bool enable) {
   if (enable) {
     WDTCR |= _BV(WDTIE);
@@ -92,11 +118,11 @@ void enableWatchdogTimer(bool enable) {
   }
 }
 
-void configureWatchdogTimer() {
-  // keep default 16ms prescaler
-  // WDTCR |= _BV(WDCE); // allow to modify prescaler
-  // WDTCR &= ~(_BV(WDP0) | _BV(WDP1) | _BV(WDP2) | _BV(WDP3));
-  static_assert(TICK_MS == 16);
+void configureTimer0() {
+  // WGM0[0,1] - fast PWM, 00-FF
+  TCCR0A |= (_BV(WGM00) | _BV(WGM01));
+  // CS00 - no prescaling, start timer
+  TCCR0B |= (_BV(CS00));
 }
 
 void configureButton() {
@@ -118,7 +144,7 @@ void onTickButton() {
 }
 
 bool needTickButton() {
-  return _pendingButtonPressed;
+  return _buttonDebounceTicksRemaining > 0 || _modeCycleTicksRemaining > 0;
 }
 
 void configureFrontLight(){
@@ -126,12 +152,25 @@ void configureFrontLight(){
   // PORTB &= ~_BV(FRONT_LED_PIN); 
 }
 
-void enableFrontLight(bool enable) {
-  if (enable) {
-    PORTB |= _BV(FRONT_LED_PIN);
-  } else {
-    PORTB &= ~_BV(FRONT_LED_PIN);
+void setFrontLightState(LIGHT_STATE state) {
+  if (state == OFF) {
+    _frontLedPwmOn = false;
+    TCCR0A &= ~FRONT_LED_PWM_TIMER_TCCR0A_MASK; // disable PWM output, so it's just OFF
+    return;
   }
+
+  if (state == ON) {
+    FRONT_LED_PWM_TIMER_COMPARE_REGISTER = 255;
+  } else {
+    _frontLedPwmOn = true;
+    FRONT_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL;
+  }
+
+  TCCR0A |= FRONT_LED_PWM_TIMER_TCCR0A_MASK; // enable PWM output
+}
+
+bool needTimer0FrontLight() {
+  return _frontLedPwmOn;
 }
 
 void configureRearLight() {
@@ -139,14 +178,28 @@ void configureRearLight() {
   // PORTB &= ~_BV(REAR_LED_PIN);
 }
 
-void enableRearLight(bool enable) {
-  if (enable) {
-    PORTB |= _BV(REAR_LED_PIN);
-  } else {
-    PORTB &= ~_BV(REAR_LED_PIN);
+void setRearLightState(LIGHT_STATE state, bool blinkOn) {
+  if (state == OFF) {
+    _rearLedPwmOn = false;
+    _rearLedBlinkOn = false;
+    TCCR0A &= ~REAR_LED_PWM_TIMER_TCCR0A_MASK; // disable PWM output, so it's just OFF
+
+    return;
   }
 
-  _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
+  if (state == ON) {
+    REAR_LED_PWM_TIMER_COMPARE_REGISTER = 255;
+  } else {
+    _rearLedPwmOn = true;
+    REAR_LED_PWM_TIMER_COMPARE_REGISTER = REAR_LED_PWM_LEVEL;
+  }
+
+  TCCR0A |= REAR_LED_PWM_TIMER_TCCR0A_MASK; // enable PWM output
+
+  if (blinkOn) {
+    _rearLedBlinkOn = true;
+    _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
+  }
 }
 
 void onTickRearLight() {
@@ -156,15 +209,19 @@ void onTickRearLight() {
 }
 
 bool needTickRearLight() {
-  return _currentLightState != OFF;
+  return _rearLightBlinkTicksRemaining > 0;
+}
+
+bool needTimer0RearLight() {
+  return _rearLedPwmOn;
 }
 
 void onLoopRearLight() {
-  if (_currentLightState == OFF || _rearLightBlinkTicksRemaining > 0) {
+  if (!_rearLedBlinkOn || _rearLightBlinkTicksRemaining > 0) {
     return;
   }
 
-   PINB |= _BV(REAR_LED_PIN);
+   TCCR0A ^= REAR_LED_PWM_TIMER_TCCR0A_MASK; // toggle
   _rearLightBlinkTicksRemaining = MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS);
 }
 
@@ -189,7 +246,7 @@ void onTickBatteryLevelModule() {
 }
 
 bool needTickBatteryLevelModule() {
-  return _enableBatteryLevelModule;
+  return _enableBatteryLevelModule && _enableBatteryLevelModuleTicksRemaining;
 }
 
 void onLoopBatteryLevelModule() {
@@ -248,12 +305,12 @@ void onLoopBatteryLevelMeasuring() {
   // if battery is discharged, notify with blinking
   for (uint8_t i = 0; i < BATTERY_LEVEL_LOW_BLINK_COUNT; i++) {
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
-    enableFrontLight(true);
-    enableRearLight(true);
+    setFrontLightState(ON);
+    setRearLightState(ON, false);
 
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
-    enableFrontLight(false);
-    enableRearLight(false);
+    setFrontLightState(OFF);
+    setRearLightState(OFF, false);
   }
 }
 
@@ -275,27 +332,32 @@ bool shouldHandleClick() {
 }
 
 LIGHT_STATE calculateNextLightState() {
-  LIGHT_STATE currentLightState = _currentLightState;
-  if (currentLightState == OFF) {
-    return ON;
-  }
-
-  // Light is ON
-  bool cycleLightModes = _modeCycleTicksRemaining > 0;
-  if (!cycleLightModes) {
+  // Handle expired mode cycling
+  if (_currentLightState != OFF && _modeCycleTicksRemaining == 0) {
     return OFF;
   }
 
-  // we don't have any other states as of now
-  return OFF;
+  switch (_currentLightState)
+  {
+    case OFF:
+      return ON;
+
+    case ON:
+      return DIMMED;
+
+    case DIMMED:
+      return OFF;
+  }
+
+  return OFF; // shall never reach
 }
 
-void enterPowerDownSleep(bool keepWatchdog) {
-  if (!keepWatchdog) {
+void enterPowerDownSleep(SLEEP_LEVEL sleepLevel) {
+  if (sleepLevel == FULL_SLEEP) {
     enableWatchdogTimer(false); // for battery saving, as we don't need to track time anyway
   }
 
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  set_sleep_mode(sleepLevel == IDLE ? SLEEP_MODE_IDLE : SLEEP_MODE_PWR_DOWN);
   sleep_enable();
   // sleep_bod_disable(); // is not enabled in fuses
   sleep_cpu();
@@ -305,12 +367,14 @@ void enterPowerDownSleep(bool keepWatchdog) {
 
 int main() {
   configureWatchdogTimer();
-  enableWatchdogTimer(true);
+  configureTimer0();
   configureButton();
   configureFrontLight();
   configureRearLight();
   configureBatteryLevelModule();
   configureBatteryLevelMeasuring();
+
+  enableWatchdogTimer(true);
 
   sei();
 
@@ -325,13 +389,18 @@ int main() {
       switch (nextState)
       {
         case ON:
-          enableFrontLight(true);
-          enableRearLight(true);
+          setFrontLightState(ON);
+          setRearLightState(ON, true);
+          break;
+
+        case DIMMED:
+          setFrontLightState(DIMMED);
+          setRearLightState(ON, true);
           break;
 
         case OFF:
-          enableFrontLight(false);
-          enableRearLight(false);
+          setFrontLightState(OFF);
+          setRearLightState(OFF, false);
           startBatteryLevelMeasuring();
           break;
       
@@ -347,12 +416,16 @@ int main() {
     onLoopBatteryLevelModule();
     onLoopBatteryLevelMeasuring();
 
-    bool keepWatchdog = false;
+    SLEEP_LEVEL sleepLevel = FULL_SLEEP;
     if (needTickButton() || needTickRearLight() || needTickBatteryLevelModule()) {
-        keepWatchdog = true;
+      sleepLevel = WATCHDOG_ONLY;
     }
 
-    enterPowerDownSleep(keepWatchdog);
+    if (needTimer0FrontLight() || needTimer0RearLight()) {
+      sleepLevel = IDLE;
+    }
+
+    enterPowerDownSleep(sleepLevel);
   }
 
   return 0;

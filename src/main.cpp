@@ -35,7 +35,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
   return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
 }
 
-#define MODE_CYCLE_WINDOW_MS 4000
+#define MODE_CYCLE_WINDOW_MS 3000
 
 #define BUTTON_DEBOUNCE_DELAY_MS 32
 
@@ -333,6 +333,7 @@ LIGHT_STATE calculateNextLightState() {
     return OFF;
   }
 
+  // if we are in mode cycling state, we never turn it off and just loop between ON
   switch (_currentLightState)
   {
     case OFF:
@@ -342,7 +343,7 @@ LIGHT_STATE calculateNextLightState() {
       return DIMMED;
 
     case DIMMED:
-      return OFF;
+      return ON;
   }
 
   return OFF; // shall never reach

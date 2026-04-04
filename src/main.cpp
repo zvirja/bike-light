@@ -51,7 +51,7 @@ volatile bool _pendingButtonPressed = false;
 volatile uint8_t _buttonDebounceTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS) <= UINT8_MAX);
 
-volatile uint8_t _modeCycleTicksRemaining = 0;
+volatile uint8_t _lightClickCycleModeOnTicksRemaining = 0;
 static_assert(MS_TO_TICKS(MODE_CYCLE_WINDOW_MS) <= UINT8_MAX);
 
 volatile uint8_t _rearLightBlinkTicksRemaining = 0;
@@ -134,8 +134,8 @@ void configureButton() {
 }
 
 void onTickButton() {
-  if (_modeCycleTicksRemaining > 0) {
-    _modeCycleTicksRemaining--;
+  if (_lightClickCycleModeOnTicksRemaining > 0) {
+    _lightClickCycleModeOnTicksRemaining--;
   }
 
   if (_buttonDebounceTicksRemaining > 0) {
@@ -144,7 +144,7 @@ void onTickButton() {
 }
 
 bool needTickButton() {
-  return _buttonDebounceTicksRemaining > 0 || _modeCycleTicksRemaining > 0;
+  return _buttonDebounceTicksRemaining > 0 || _lightClickCycleModeOnTicksRemaining > 0;
 }
 
 void configureFrontLight(){
@@ -324,16 +324,12 @@ bool shouldHandleClick() {
   _pendingButtonPressed = false;
 
   bool isButtonDown = bit_is_clear(PINB, BTN_PIN); // reversed
-  if (isButtonDown) {
-    _modeCycleTicksRemaining = MS_TO_TICKS(MODE_CYCLE_WINDOW_MS);
-  }
-
   return isButtonDown;
 }
 
 LIGHT_STATE calculateNextLightState() {
   // Handle expired mode cycling
-  if (_currentLightState != OFF && _modeCycleTicksRemaining == 0) {
+  if (_currentLightState != OFF && _lightClickCycleModeOnTicksRemaining == 0) {
     return OFF;
   }
 
@@ -386,6 +382,9 @@ int main() {
       // as it takes around 100uA in standby mode
       enableBatteryLevelModuleTemporarily();
 
+      _currentLightState = nextState;
+      _lightClickCycleModeOnTicksRemaining = MS_TO_TICKS(MODE_CYCLE_WINDOW_MS);
+
       switch (nextState)
       {
         case ON:
@@ -408,7 +407,6 @@ int main() {
           break;
       }
 
-      _currentLightState = nextState;
       continue;
     }
 

@@ -35,7 +35,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
   return ms / TICK_MS + (ms % TICK_MS != 0 ? 1 : 0);
 }
 
-#define MODE_CYCLE_WINDOW_MS 3000
+#define CYCLE_LIGHT_MODE_ON_CLICK_WINDOW_MS 3000
 
 #define BUTTON_DEBOUNCE_DELAY_MS 32
 
@@ -51,8 +51,8 @@ volatile bool _pendingButtonPressed = false;
 volatile uint8_t _buttonDebounceTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BUTTON_DEBOUNCE_DELAY_MS) <= UINT8_MAX);
 
-volatile uint8_t _lightClickCycleModeOnTicksRemaining = 0;
-static_assert(MS_TO_TICKS(MODE_CYCLE_WINDOW_MS) <= UINT8_MAX);
+volatile uint8_t _cycleLightModeOnClickTicksRemaining = 0;
+static_assert(MS_TO_TICKS(CYCLE_LIGHT_MODE_ON_CLICK_WINDOW_MS) <= UINT8_MAX);
 
 volatile uint8_t _rearLightBlinkTicksRemaining = 0;
 static_assert(MS_TO_TICKS(REAR_LIGHT_BLINK_INTERVAL_MS) <= UINT8_MAX);
@@ -134,8 +134,8 @@ void configureButton() {
 }
 
 void onTickButton() {
-  if (_lightClickCycleModeOnTicksRemaining > 0) {
-    _lightClickCycleModeOnTicksRemaining--;
+  if (_cycleLightModeOnClickTicksRemaining > 0) {
+    _cycleLightModeOnClickTicksRemaining--;
   }
 
   if (_buttonDebounceTicksRemaining > 0) {
@@ -144,7 +144,7 @@ void onTickButton() {
 }
 
 bool needTickButton() {
-  return _buttonDebounceTicksRemaining > 0 || _lightClickCycleModeOnTicksRemaining > 0;
+  return _buttonDebounceTicksRemaining > 0 || _cycleLightModeOnClickTicksRemaining > 0;
 }
 
 void configureFrontLight(){
@@ -329,7 +329,7 @@ bool shouldHandleClick() {
 
 LIGHT_STATE calculateNextLightState() {
   // Handle expired mode cycling
-  if (_currentLightState != OFF && _lightClickCycleModeOnTicksRemaining == 0) {
+  if (_currentLightState != OFF && _cycleLightModeOnClickTicksRemaining == 0) {
     return OFF;
   }
 
@@ -384,7 +384,7 @@ int main() {
       enableBatteryLevelModuleTemporarily();
 
       _currentLightState = nextState;
-      _lightClickCycleModeOnTicksRemaining = MS_TO_TICKS(MODE_CYCLE_WINDOW_MS);
+      _cycleLightModeOnClickTicksRemaining = MS_TO_TICKS(CYCLE_LIGHT_MODE_ON_CLICK_WINDOW_MS);
 
       switch (nextState)
       {

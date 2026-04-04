@@ -43,7 +43,7 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 
 #define BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS 30000
 
-#define BATTERY_LEVEL_LOW_TRESHOLD 740 // Shall be around 3V
+#define BATTERY_LEVEL_LOW_TRESHOLD 185 // Shall be around 3V
 #define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
 #define BATTERY_LEVEL_LOW_BLINK_COUNT 3
 
@@ -61,8 +61,7 @@ volatile bool _enableBatteryLevelModule = false;
 volatile uint16_t _enableBatteryLevelModuleTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS) <= UINT16_MAX);
 
-volatile bool _pendingBatteryLevelMeasuringResult = false;
-volatile uint16_t _batteryLevelMeasuringResult = 0;
+volatile bool _pendingNotifyLowBatteryLevel = false;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
@@ -98,9 +97,12 @@ ISR(PCINT0_vect) {
 }
 
 ISR(ADC_vect) {
-  _batteryLevelMeasuringResult = ADCL;
-  _batteryLevelMeasuringResult |= ADCH << 8;
-  _pendingBatteryLevelMeasuringResult = true;
+  ADCSRA &= ~_BV(ADEN); // disable ADC, as we got the result
+
+  auto measuringResult = ADCH;
+  if (measuringResult < BATTERY_LEVEL_LOW_TRESHOLD) {
+    _pendingNotifyLowBatteryLevel = true;
+  }
 }
 
 void configureWatchdogTimer() {
@@ -267,7 +269,7 @@ void onLoopBatteryLevelModule() {
 // wired resistors are 3.3kOm and 10kOm
 // connected PB3
 void configureBatteryLevelMeasuring() {
-  ADMUX |= _BV(REFS0); // internal 1.1V voltage reference
+  ADMUX |= _BV(REFS0) | _BV(ADLAR); // internal 1.1V voltage reference
   ADMUX |= _BV(MUX0) | _BV(MUX1); // Pin PB3
 
   ADCSRA |= _BV(ADIE); // enable ADC Conversion interrupt
@@ -278,8 +280,6 @@ void startBatteryLevelMeasuring() {
   ADCSRA |= _BV(ADEN); // enable ADC
   _delay_ms(50); // to stabilize and charge the capacitor
 
-  _batteryLevelMeasuringResult = 0;
-
   // Sleep for better measurements
   // It will automatically start measure
   set_sleep_mode(SLEEP_MODE_ADC);
@@ -288,17 +288,11 @@ void startBatteryLevelMeasuring() {
 }
 
 void onLoopBatteryLevelMeasuring() {
-  if (!_pendingBatteryLevelMeasuringResult) {
+  if (!_pendingNotifyLowBatteryLevel) {
     return;
   }
 
-  _pendingBatteryLevelMeasuringResult = false; // reset, as we handle it here
-
-  ADCSRA &= ~_BV(ADEN); // disable ADC, as we got the result
-
-  if (_batteryLevelMeasuringResult > BATTERY_LEVEL_LOW_TRESHOLD) {
-    return;
-  }
+  _pendingNotifyLowBatteryLevel = false; // reset
 
   _delay_ms(100); // to give impression that light was off before blinking
 

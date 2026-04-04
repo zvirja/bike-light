@@ -69,12 +69,6 @@ enum LIGHT_STATE : uint8_t {
   DIMMED
 };
 
-enum SLEEP_LEVEL : uint8_t {
-  FULL_SLEEP,
-  WATCHDOG_ONLY,
-  IDLE
-};
-
 volatile LIGHT_STATE _currentLightState = OFF;
 
 volatile bool _frontLedPwmOn = false;
@@ -343,19 +337,6 @@ LIGHT_STATE calculateNextLightState() {
   return OFF; // shall never reach
 }
 
-void enterPowerDownSleep(SLEEP_LEVEL sleepLevel) {
-  if (sleepLevel == FULL_SLEEP) {
-    enableWatchdogTimer(false); // for battery saving, as we don't need to track time anyway
-  }
-
-  set_sleep_mode(sleepLevel == IDLE ? SLEEP_MODE_IDLE : SLEEP_MODE_PWR_DOWN);
-  sleep_enable();
-  // sleep_bod_disable(); // is not enabled in fuses
-  sleep_cpu();
-
-  enableWatchdogTimer(true);
-}
-
 int main() {
   configureWatchdogTimer();
   configureTimer0();
@@ -401,24 +382,25 @@ int main() {
         default:
           break;
       }
-
-      continue;
     }
 
     onLoopRearLight();
     onLoopBatteryLevelModule();
     onLoopBatteryLevelMeasuring();
 
-    SLEEP_LEVEL sleepLevel = FULL_SLEEP;
-    if (needTickButton() || needTickRearLight() || needTickBatteryLevelModule()) {
-      sleepLevel = WATCHDOG_ONLY;
-    }
+    // go to sleep
+    auto needWatchdog = needTickButton() || needTickRearLight() || needTickBatteryLevelModule();
+    auto needTimer0 = needTimer0FrontLight() || needTimer0RearLight();
 
-    if (needTimer0FrontLight() || needTimer0RearLight()) {
-      sleepLevel = IDLE;
+    if (!needWatchdog) {
+      enableWatchdogTimer(false);
     }
+    
+    set_sleep_mode(needTimer0 ? SLEEP_MODE_IDLE : SLEEP_MODE_PWR_DOWN);
+    sleep_enable();
+    sleep_cpu();
 
-    enterPowerDownSleep(sleepLevel);
+    enableWatchdogTimer(true); // re-enable watchdog if was disabled
   }
 
   return 0;

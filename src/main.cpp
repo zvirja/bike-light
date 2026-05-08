@@ -7,7 +7,9 @@
 static_assert(FRONT_LED_PIN == PIN1);
 static_assert(FRONT_LED_PIN == DD1);
 
-#define FRONT_LED_PWM_LEVEL 150
+#define FRONT_LED_PWM_LEVEL_MAX 255
+#define FRONT_LED_PWM_LEVEL_BRIGHT 175
+#define FRONT_LED_PWM_LEVEL_DIMMED 100
 #define FRONT_LED_PWM_TIMER_COMPARE_REGISTER OCR0B
 #define FRONT_LED_PWM_TIMER_TCCR0A_MASK (_BV(COM0B1))
 
@@ -15,7 +17,9 @@ static_assert(FRONT_LED_PIN == DD1);
 static_assert(REAR_LED_PIN == PIN0);
 static_assert(REAR_LED_PIN == DD0);
 
-#define REAR_LED_PWM_LEVEL 100
+#define REAR_LED_PWM_LEVEL_MAX 255
+#define REAR_LED_PWM_LEVEL_BRIGHT 150
+#define REAR_LED_PWM_LEVEL_DIMMED 75
 #define REAR_LED_PWM_TIMER_COMPARE_REGISTER OCR0A
 #define REAR_LED_PWM_TIMER_TCCR0A_MASK (_BV(COM0A1))
 
@@ -65,8 +69,9 @@ volatile bool _pendingNotifyLowBatteryLevel = false;
 
 enum LIGHT_STATE : uint8_t {
   OFF,
-  ON,
-  DIMMED
+  ON_FULL,
+  ON_BRIGHT,
+  ON_DIMMED
 };
 
 volatile LIGHT_STATE _currentLightState = OFF;
@@ -155,11 +160,24 @@ void setFrontLightState(LIGHT_STATE state) {
     return;
   }
 
-  if (state == ON) {
-    FRONT_LED_PWM_TIMER_COMPARE_REGISTER = 255;
-  } else {
-    _frontLedPwmOn = true;
-    FRONT_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL;
+  switch (state)
+  {
+    case ON_FULL:
+      FRONT_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL_MAX;
+      break;
+
+    case ON_BRIGHT:
+      _frontLedPwmOn = true;
+      FRONT_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL_BRIGHT;
+      break;
+
+    case ON_DIMMED:
+      _frontLedPwmOn = true;
+      FRONT_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL_DIMMED;
+      break;
+
+    default:
+      break;
   }
 
   TCCR0A |= FRONT_LED_PWM_TIMER_TCCR0A_MASK; // enable PWM output
@@ -183,11 +201,24 @@ void setRearLightState(LIGHT_STATE state, bool blinkOn) {
     return;
   }
 
-  if (state == ON) {
-    REAR_LED_PWM_TIMER_COMPARE_REGISTER = 255;
-  } else {
-    _rearLedPwmOn = true;
-    REAR_LED_PWM_TIMER_COMPARE_REGISTER = REAR_LED_PWM_LEVEL;
+  switch (state)
+  {
+    case ON_FULL:
+      REAR_LED_PWM_TIMER_COMPARE_REGISTER = FRONT_LED_PWM_LEVEL_MAX;
+      break;
+
+    case ON_BRIGHT:
+      _rearLedPwmOn = true;
+      REAR_LED_PWM_TIMER_COMPARE_REGISTER = REAR_LED_PWM_LEVEL_BRIGHT;
+      break;
+
+    case ON_DIMMED:
+      _rearLedPwmOn = true;
+      REAR_LED_PWM_TIMER_COMPARE_REGISTER = REAR_LED_PWM_LEVEL_DIMMED;
+      break;
+
+    default:
+      break;
   }
 
   TCCR0A |= REAR_LED_PWM_TIMER_TCCR0A_MASK; // enable PWM output
@@ -293,8 +324,8 @@ void onLoopBatteryLevelMeasuring() {
   // if battery is discharged, notify with blinking
   for (uint8_t i = 0; i < BATTERY_LEVEL_LOW_BLINK_COUNT; i++) {
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
-    setFrontLightState(ON);
-    setRearLightState(ON, false);
+    setFrontLightState(ON_FULL);
+    setRearLightState(ON_FULL, false);
 
     _delay_ms(BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS);
     setFrontLightState(OFF);
@@ -325,13 +356,16 @@ LIGHT_STATE calculateNextLightState() {
   switch (_currentLightState)
   {
     case OFF:
-      return ON;
+      return ON_BRIGHT;
 
-    case ON:
-      return DIMMED;
+    case ON_BRIGHT:
+      return ON_FULL;
 
-    case DIMMED:
-      return ON;
+    case ON_FULL:
+      return ON_DIMMED;
+
+    case ON_DIMMED:
+      return ON_BRIGHT;
   }
 
   return OFF; // shall never reach
@@ -363,14 +397,19 @@ int main() {
 
       switch (nextState)
       {
-        case ON:
-          setFrontLightState(ON);
-          setRearLightState(ON, true);
+        case ON_FULL:
+          setFrontLightState(ON_FULL);
+          setRearLightState(ON_BRIGHT, true);
           break;
 
-        case DIMMED:
-          setFrontLightState(DIMMED);
-          setRearLightState(ON, true);
+        case ON_BRIGHT:
+          setFrontLightState(ON_BRIGHT);
+          setRearLightState(ON_BRIGHT, true);
+          break;
+
+        case ON_DIMMED:
+          setFrontLightState(ON_DIMMED);
+          setRearLightState(ON_DIMMED, true);
           break;
 
         case OFF:

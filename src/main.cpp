@@ -352,7 +352,8 @@ LIGHT_STATE calculateNextLightState() {
     return OFF;
   }
 
-  // if we are in mode cycling state, we never turn it off and just loop between ON
+  // if we are in mode cycling state, still have OFF
+  // without that it doesn't feel suffocating as if you have no exit
   switch (_currentLightState)
   {
     case OFF:
@@ -365,7 +366,7 @@ LIGHT_STATE calculateNextLightState() {
       return ON_DIMMED;
 
     case ON_DIMMED:
-      return ON_BRIGHT;
+      return OFF;
   }
 
   return OFF; // shall never reach

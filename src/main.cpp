@@ -47,6 +47,8 @@ constexpr uint16_t MS_TO_TICKS(uint16_t ms) {
 
 #define BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS 30000
 
+#define START_BATTERY_LEVEL_MEASURING_DELAY_MS 1000
+
 #define BATTERY_LEVEL_LOW_TRESHOLD 185 // Shall be around 3V
 #define BATTERY_LEVEL_LOW_BLINK_INTERNAL_MS 150
 #define BATTERY_LEVEL_LOW_BLINK_COUNT 3
@@ -65,6 +67,10 @@ volatile bool _enableBatteryLevelModule = false;
 volatile uint16_t _enableBatteryLevelModuleTicksRemaining = 0;
 static_assert(MS_TO_TICKS(BATTERY_LEVEL_MODULE_ON_TIMEOUT_MS) <= UINT16_MAX);
 
+volatile bool _pendingStartBatteryLevelMeasuring = false;
+volatile uint8_t _pendingStartBatteryLevelMeasuringTicksRemaining = 0;
+static_assert(MS_TO_TICKS(START_BATTERY_LEVEL_MEASURING_DELAY_MS) <= UINT8_MAX);
+
 volatile bool _pendingNotifyLowBatteryLevel = false;
 
 enum LIGHT_STATE : uint8_t {
@@ -82,11 +88,13 @@ volatile bool _rearLedBlinkOn = false;
 
 inline void onTickRearLight();
 inline void onTickBatteryLevelModule();
+inline void onTickBatteryLevelMeasuringDelayedStart();
 inline void onTickButton();
 
 ISR(WDT_vect) {
   onTickRearLight();
   onTickBatteryLevelModule();
+  onTickBatteryLevelMeasuringDelayedStart();
   onTickButton();
 }
 
@@ -301,9 +309,34 @@ void configureBatteryLevelMeasuring() {
   ADCSRA |= _BV(ADPS0) | _BV(ADPS1) | _BV(ADPS2); // set prescaler to /128 for the best accuracy
 }
 
-void startBatteryLevelMeasuring() {
+void requestBatteryLevelMeasuring() {
+  _pendingStartBatteryLevelMeasuring = true;
+  _pendingStartBatteryLevelMeasuringTicksRemaining = MS_TO_TICKS(START_BATTERY_LEVEL_MEASURING_DELAY_MS);
+}
+
+void cancelBatteryLevelMeasuringRequest() {
+  _pendingStartBatteryLevelMeasuring = false;
+  _pendingStartBatteryLevelMeasuringTicksRemaining = 0;
+}
+
+void onTickBatteryLevelMeasuringDelayedStart() {
+  if (_pendingStartBatteryLevelMeasuring && _pendingStartBatteryLevelMeasuringTicksRemaining > 0) {
+    _pendingStartBatteryLevelMeasuringTicksRemaining--;
+  }
+}
+
+bool needTickBatteryLevelMeasuringDelayedStart() {
+  return _pendingStartBatteryLevelMeasuring;
+}
+
+void onLoopBatteryLevelMeasuringDelayedStart() {
+  if (!_pendingStartBatteryLevelMeasuring || _pendingStartBatteryLevelMeasuringTicksRemaining > 0) {
+    return;
+  }
+
+  _pendingStartBatteryLevelMeasuring = false; // reset
+
   ADCSRA |= _BV(ADEN); // enable ADC
-  _delay_ms(50); // to stabilize and charge the capacitor
 
   // Sleep for better measurements
   // It will automatically start measure
@@ -312,14 +345,12 @@ void startBatteryLevelMeasuring() {
   sleep_cpu();
 }
 
-void onLoopBatteryLevelMeasuring() {
+void onLoopBatteryLevelMeasuringNotifyLow() {
   if (!_pendingNotifyLowBatteryLevel) {
     return;
   }
 
   _pendingNotifyLowBatteryLevel = false; // reset
-
-  _delay_ms(100); // to give impression that light was off before blinking
 
   // if battery is discharged, notify with blinking
   for (uint8_t i = 0; i < BATTERY_LEVEL_LOW_BLINK_COUNT; i++) {
@@ -416,20 +447,27 @@ int main() {
         case OFF:
           setFrontLightState(OFF);
           setRearLightState(OFF, false);
-          startBatteryLevelMeasuring();
           break;
       
         default:
           break;
       }
+
+      if (nextState == OFF) {
+        requestBatteryLevelMeasuring();
+      } else {
+        // cancel pending request if it's present
+        cancelBatteryLevelMeasuringRequest();
+      }
     }
 
     onLoopRearLight();
     onLoopBatteryLevelModule();
-    onLoopBatteryLevelMeasuring();
+    onLoopBatteryLevelMeasuringDelayedStart();
+    onLoopBatteryLevelMeasuringNotifyLow();
 
     // go to sleep
-    auto needWatchdog = needTickButton() || needTickRearLight() || needTickBatteryLevelModule();
+    auto needWatchdog = needTickButton() || needTickRearLight() || needTickBatteryLevelModule() || needTickBatteryLevelMeasuringDelayedStart();
     auto needTimer0 = needTimer0FrontLight() || needTimer0RearLight();
 
     if (!needWatchdog) {
